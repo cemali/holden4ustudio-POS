@@ -1,0 +1,19 @@
+cat > .gitignore <<'EOF'
+# Dependencies (reinstalled with npm install)
+node_modules/
+
+# Local NeDB data files
+databases/
+
+# Secrets / environment config
+.env
+.env.*
+.npmrc
+
+# Logs
+*.log
+npm-debug.log*
+
+# text
+*.txt
+EOF
