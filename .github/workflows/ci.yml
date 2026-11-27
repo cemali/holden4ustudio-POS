@@ -1,0 +1,113 @@
+# .github/workflows/ci.yml
+# CI for holden4ustudio-POS:
+#   1. test  - install, security audit, start the server and smoke-test the API
+#   2. image - build the Docker image; on pushes to main, push it to GitHub Container Registry
+# The pushed image tag (sha-xxxxxxx) is what your Argo CD / GitOps manifests will point to.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  NODE_VERSION: "26"
+  PORT: "8001"
+
+jobs:
+  test:
+    name: Test & audit
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Install dependencies (from lockfile)
+        run: npm ci
+
+      # Fails the build on high/critical vulnerabilities in packages that ship to production.
+      # Dev-only tools (nodemon) are excluded because they never reach the image.
+      - name: Security audit (production deps)
+        run: npm audit --omit=dev --audit-level=high
+
+      - name: Smoke test the server
+        run: |
+          node index.js > server.log 2>&1 &
+          # wait up to 15s for the server to answer
+          for i in $(seq 1 15); do
+            curl -fs "http://localhost:${PORT}/" && break
+            sleep 1
+          done
+          echo
+          curl -fs "http://localhost:${PORT}/" | grep -q "running"
+          curl -fs "http://localhost:${PORT}/api/inventory/products"
+          echo
+          curl -fs -X POST "http://localhost:${PORT}/api/inventory/product" \
+            -H "Content-Type: application/json" \
+            -d '{"name":"CI test item","quantity_on_hand":1}'
+          echo
+          echo "Smoke test passed"
+
+      - name: Show server log on failure
+        if: failure()
+        run: cat server.log || true
+
+  image:
+    name: Build & push image
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write   # needed to push to ghcr.io with GITHUB_TOKEN
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v6
+
+      # GHCR image names must be lowercase; repo names like "holden4ustudio-POS" are not.
+      - name: Compute image name
+        id: img
+        run: echo "name=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Generate image tags
+        id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ${{ steps.img.outputs.name }}
+          tags: |
+            type=sha,prefix=sha-
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      # Pull requests: build only (proves the Dockerfile works).
+      # Pushes to main: build and push.
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

@@ -1,15 +1,19 @@
 var express = require("express"),
   http = require("http"),
-  port = 80,
   app = require("express")(),
   server = http.createServer(app),
   bodyParser = require("body-parser"),
   io = require("socket.io")(server),
   liveCart;
+  const PORT = process.env.PORT || 8001;
+  server.listen(PORT, () => console.log(`Listening on port ${PORT}`));
+
 console.log("Real time POS running");
 console.log("Server started");
 app.use(bodyParser.json());
 app.use(bodyParser.urlencoded({ extended: false }));
+
+
 app.all("/{*matt}", function (req, res, next) {
   // CORS headers
   res.header("Access-Control-Allow-Origin", "*"); // restrict it to the required domain
@@ -49,4 +53,4 @@ io.on("connection", function(socket) {
     socket.broadcast.emit("update-live-cart-display", liveCart);
   });
 });
-server.listen(port, () => console.log(`Listening on port ${port}`));
+server.listen(PORT, () => console.log(`Listening on port ${PORT}`));
